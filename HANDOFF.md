@@ -1,4 +1,30 @@
-# fluxgym-pro handoff — v1.06
+# fluxgym-pro handoff — v1.07
+
+## Changed this session (v1.07)
+
+- **Krea 2 defaults to ConvRot INT8** when selected as the base model
+  (`app.py on_model_change` now also sets the quantization dropdown:
+  krea2 → "ConvRot INT8 (Krea 2 only)", others → Automatic). Verified:
+  build_cfg INT8 config emits `--convrot_int8` and NO `--fp8_base/--fp8_scaled`.
+- **Pinokio**: added `checkpoints.js` (runs `python install.py` interactively in
+  the pinokio terminal; done on /setup complete/) and a **Model setup** menu entry
+  in `pinokio.js`. Backends clone into the apps dir next to this app, matching the
+  UI default `../musubi-tuner`.
+- **README**: new "Pinokio" how-to-run section (New → Install from URL →
+  Install → Model setup → Start); new Krea-2-on-16GB guidance (use ConvRot INT8,
+  raise blocks_to_swap if VRAM tight).
+- Version bump v1.06 → v1.07.
+
+### Training smoke-test report (real runs, v1.05 toolchain)
+All three training paths were executed to completion with real weights + a
+1024×1024 test image and produced valid LoRA `.safetensors`:
+- Z-Image (musubi): 10 epochs PASS; 630 lora tensors, rank 8; loss 0.03→0.01, ~5.4 s/it.
+- Krea 2 (musubi): 1 epoch PASS; 792 lora tensors, rank 8; loss 0.002.
+- Qwen-Image-2.1 (ai-toolkit): 1 step PASS; 384 diffusers-style lora tensors.
+Krea 2 was indeed the heaviest: fp8_base+fp8_scaled at 1024px pegged 15.8/16.3 GB
+VRAM and the FIRST step after a killed run stalled ~15 min (0% GPU engine, CPU
+spin = allocator pressure). Clean rerun finished the step in 0.3 s. Hence the
+v1.07 default → ConvRot INT8 for Krea 2.
 
 ## Changed this session (v1.06)
 

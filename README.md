@@ -37,6 +37,19 @@ Every step is skippable and re-runnable (downloads resume). The token is used in
 memory only — nothing is saved to disk. Krea 2 also requires accepting the repo
 terms at https://huggingface.co/krea/Krea-2-Raw before the download works.
 
+### Pinokio
+
+1. In Pinokio: **New** → **Install from URL** → paste
+   `https://github.com/emperorofrome13/fluxgym-pro`.
+2. Click **Install** — creates the venv and installs UI deps (fast, no weights).
+3. Click **Model setup** — the same interactive prompts as `install.bat`
+   (backends + checkpoints; your HF token is asked only for Krea 2).
+4. Click **Start** → **Open Web UI** when the terminal shows the localhost URL.
+
+The training backends clone into the Pinokio apps folder *next to* this app —
+exactly where the UI's default backend-folder field (`../musubi-tuner`) looks,
+so no path editing is needed.
+
 Manual equivalent:
 
 ```powershell
@@ -104,6 +117,14 @@ matching shift/guidance, checkpoint precision, optimizer-state saving,
 memory-efficient saves, and seed. They are written directly into the generated
 PowerShell command; options labelled **musubi only** are intentionally not sent
 to Qwen's different ai-toolkit backend.
+
+**Krea 2 on 16 GB cards**: picking **Krea 2** in the base-model dropdown now
+defaults its frozen-weight quantization to **ConvRot INT8 (Krea 2 only)** — the
+lightweight option (no scaled FP8, several GB less VRAM) and the one to use if
+scaled FP8 feels heavy or stalls on load. On bigger GPUs you can switch back to
+Automatic (scaled FP8). ConvRot's full speedup benefits from Triton; without it
+it still trains, just slower per step. Raise **DiT blocks swapped to CPU** if
+VRAM is tight.
 
 **Full BF16 base weights** and **memory-efficient checkpoint saves** were removed
 with musubi-tuner 0.3.5 (its consolidated `*_train_network.py` scripts no longer

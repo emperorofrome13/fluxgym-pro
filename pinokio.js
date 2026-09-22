@@ -48,6 +48,10 @@ module.exports = {
         icon: "fa-solid fa-plug",
         text: "Install",
         href: "install.js",
+      }, {
+        icon: "fa-solid fa-download",
+        text: "Model setup",
+        href: "checkpoints.js",
       }]
     }
   }

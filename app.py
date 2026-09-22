@@ -425,9 +425,11 @@ def read_log(output_name):
 # --------------------------------------------------------------------- UI ---
 def on_model_change(name):
     m = MODELS.get(name, {})
+    quant = ("ConvRot INT8 (Krea 2 only)" if m.get("arch") == "krea2"
+             else "Automatic (recommended)")
     return (m.get("default_lr", 1e-4), m.get("default_dim", 16),
             m.get("default_alpha", 16), m.get("default_resolution", 1024),
-            m.get("backend_dir", ""), m.get("num_repeats", 1))
+            m.get("backend_dir", ""), m.get("num_repeats", 1), quant)
 
 
 def on_vram_profile_change(profile, base_model):
@@ -446,7 +448,7 @@ def sample_controls(enabled):
 
 with gr.Blocks(title="fluxgym-pro") as app:
     gr.Markdown(
-        "# fluxgym-pro v1.06\n"
+        "# fluxgym-pro v1.07\n"
         "Dead simple LoRA training for **Z-Image**, **Krea 2** and "
         "**Qwen-Image-2.1** — a fork of fluxgym.\n\n"
         "1. Create a dataset  2. (optional) AI captions  3. Pick a base model  "
@@ -625,7 +627,7 @@ with gr.Blocks(title="fluxgym-pro") as app:
 
     base_model.change(on_model_change, [base_model],
                       [learning_rate, network_dim, network_alpha,
-                       resolution, backend_dir, repeats])
+                       resolution, backend_dir, repeats, quantization])
     vram_profile.change(on_vram_profile_change, [vram_profile, base_model],
                         [resolution, blocks_to_swap, cpu_offload])
     samples_enabled.change(sample_controls, [samples_enabled],
