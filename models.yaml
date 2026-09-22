@@ -29,8 +29,8 @@ Krea 2 (Raw):
   repo: krea/Krea-2-Raw
   backend_dir: ../musubi-tuner
   dit_path: raw.safetensors
-  vae_path: vae/diffusion_pytorch_model.safetensors
-  text_encoder_path: text_encoder/model.safetensors
+  vae_path: qwen_image_vae.safetensors
+  text_encoder_path: qwen3vl_4b_bf16.safetensors
   default_lr: 1e-4
   default_dim: 32
   default_alpha: 32

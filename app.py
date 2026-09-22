@@ -242,13 +242,13 @@ def build_cfg(base_model, dataset_name, output_name, backend_dir,
     if arch == "qwen_image_2" and quantization not in (
             "Automatic (recommended)", "None (largest VRAM use)"):
         raise gr.Error("Qwen-Image-2.1 uses ai-toolkit quantization; choose Automatic or None.")
-    if full_bf16 and arch == "qwen_image_2":
-        raise gr.Error("Full BF16 base weights are a musubi-tuner option, not an ai-toolkit option.")
+    if full_bf16:
+        raise gr.Error("Full BF16 base weights were removed from musubi-tuner 0.3.5. "
+                       "Use the FP8 options instead.")
+    if mem_eff_save:
+        raise gr.Error("Memory-efficient checkpoint saving was removed from musubi-tuner 0.3.5.")
     if full_bf16 and mixed_precision != "bf16":
         raise gr.Error("Full BF16 base weights require BF16 mixed precision.")
-    if (full_bf16 or (optimizer == "adafactor" and int(blocks_to_swap or 0) > 0)) \
-            and int(gradient_accumulation or 1) > 1:
-        raise gr.Error("Fused backward pass does not support gradient accumulation. Set it to 1.")
 
     fp8_base = quantization in ("Automatic (recommended)", "FP8 DiT (scaled)",
                                  "FP8 DiT + text encoder (Z-Image)") and bool(m.get("fp8_base", False))
@@ -446,7 +446,7 @@ def sample_controls(enabled):
 
 with gr.Blocks(title="fluxgym-pro") as app:
     gr.Markdown(
-        "# fluxgym-pro v1.04\n"
+        "# fluxgym-pro v1.05\n"
         "Dead simple LoRA training for **Z-Image**, **Krea 2** and "
         "**Qwen-Image-2.1** — a fork of fluxgym.\n\n"
         "1. Create a dataset  2. (optional) AI captions  3. Pick a base model  "
@@ -538,9 +538,9 @@ with gr.Blocks(title="fluxgym-pro") as app:
                     cpu_offload = gr.Checkbox(
                         label="CPU offload during gradient checkpointing", value=False)
                     full_bf16 = gr.Checkbox(
-                        label="Full BF16 base weights (musubi only; lower VRAM, experimental)",
+                        label="Full BF16 base weights (removed in musubi 0.3.5)",
                         value=False,
-                        info="This uses Adafactor plus fused backward pass automatically. It is not FP8.")
+                        info="musubi-tuner 0.3.5 no longer ships --full_bf16. Use the FP8 options.")
                 with gr.Accordion("Optimizer and learning-rate schedule (musubi only)", open=False):
                     with gr.Row():
                         optimizer = gr.Dropdown(label="Optimizer", choices=["adamw8bit", "adafactor"],
@@ -587,7 +587,8 @@ with gr.Blocks(title="fluxgym-pro") as app:
                             label="Save optimizer state for resume (musubi)", value=True)
                     with gr.Row():
                         mem_eff_save = gr.Checkbox(
-                            label="Use memory-efficient checkpoint saving (musubi)", value=False)
+                            label="Memory-efficient checkpoint saving (removed in musubi 0.3.5)",
+                            value=False)
                         flow_seed = gr.Number(label="Training seed", value=0, precision=0)
                     # Kept as a named component so the UI can expose the same seed users
                     # expect from FluxGym; build_cfg reads this value through seed below.

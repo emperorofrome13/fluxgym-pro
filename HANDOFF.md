@@ -1,4 +1,39 @@
-# fluxgym-pro handoff — v1.04
+# fluxgym-pro handoff — v1.05
+
+## Verified this session: real end-to-end training on all 3 architectures (2026-09-22)
+
+Each backend was actually run on real weights with a 1024×1024 test image and produced a valid LoRA:
+
+| arch | backend | run | output | result |
+|------|---------|-----|--------|--------|
+| Z-Image (Tongyi 6B) | musubi-tuner | 10 epochs/10 steps | `outputs/ztest_zimage/ztest_zimage.safetensors` (33.5 MB, 630 lora tensors) | PASS |
+| Krea 2 (Raw) | musubi-tuner | 1 epoch | `outputs/ztest_krea2/ztest_krea2.safetensors` (56.0 MB, 792 lora tensors) | PASS |
+| Qwen-Image-2.1 | ai-toolkit | 1 step | `outputs/ztest_qwen/` (38.0 MB, 384 lora tensors) | PASS |
+
+Real training steps ran: zimage avr_loss 0.03→0.01 (5.4s/it), krea2 avr_loss 0.002, qwen saved checkpoint + optimizer.pt.
+
+### What was discovered and fixed this session
+- **musubi 0.3.5 flag parity**: consolidated `*_train_network.py` scripts do NOT support `--mem_eff_save`,
+  `--block_swap_optimizer_patch_params`, `--fused_backward_pass`, `--full_bf16`.
+  `command_gen.py` no longer emits them; `app.py build_cfg` raises `gr.Error` if `full_bf16`/`mem_eff_save`
+  are enabled (checkboxes relabeled "removed in musubi 0.3.5").
+- **Bare `accelerate` resolves to a stale global install** (global Python312 musubi_tuner → `fluxgymzimage/`).
+  `command_gen.py` now derives `accelerate.exe` from the backend venv's python dir and emits `&` call operator.
+- **Windows cp1252 crash**: musubi prints Japanese summary lines (trainer_base.py:1776). Generated train.ps1 now sets
+  `$env:PYTHONIOENCODING='utf-8'` first.
+- **musubi silently drops images without captions** (media_utils.py:69–81): every image needs a matching `.txt`.
+  Test dataset now has `datasets/test_lora/img/test.txt`.
+- **Krea-2 weights**: real DiT found locally (`E:\waiting ais\krea2Raw_v10.safetensors`), hardlinked into
+  `models/krea_Krea-2-Raw/raw.safetensors` (no extra disk). VAE `qwen_image_vae.safetensors` + TE
+  `qwen3vl_4b_bf16.safetensors` downloaded; `models.yaml` krea2 entry points at them.
+- **Qwen / ai-toolkit**: first untested path, works. It downloads its own copies of transformer (14.2 GB bf16,
+  quantized to qfloat8), 8B text encoder, VAE. It generates a baseline sample before training even when samples
+  are disabled (ai-toolkit default) — noted, not a failure.
+- **Known hiccups (hardware, not code)**: first-ever krea2 step after a killed run stalled ~15 min at epoch 1
+  (0% GPU engine, CPU climbing = allocator/OOM-adjacent spin at 15.8/16.3 GB VRAM with fp8_base+fp8_scaled+
+  blocks_to_swap 12 at 1024px). A clean rerun completed the step in 0.3 s. On 16 GB cards, users may want a
+  higher `blocks_to_swap` for krea2 step-1 CUDA init.
+- `command_gen.py`/_`ps_quote` also fixed: quoted executable at statement start required `&`.
 
 ## Changed (this session)
 
