@@ -18,11 +18,24 @@ training script differs (PowerShell on Windows, with `$LASTEXITCODE` checks).
 ## Quickstart
 
 ```bat
-quickstart.bat
+install.bat    # one-time: backends + model checkpoints (asks yes/no + HF token for Krea 2)
+quickstart.bat # every time: starts the UI at http://127.0.0.1:7860
 ```
 
-That creates a local venv, installs UI deps, and opens http://127.0.0.1:7860.
-(The UI itself needs no torch — training runs in the backend's own venv.)
+`install.bat` creates the UI venv, installs UI deps, then walks you through the
+big one-time downloads. It asks yes/no for each component, and asks for your
+Hugging Face token only when you choose **Krea 2** (its DiT repo is gated):
+
+| Prompt | What it installs | Size |
+|---|---|---|
+| Backends | `musubi-tuner` + `ai-toolkit`, cloned next to this folder, with their own venvs + CUDA torch | hours of pip, once |
+| Z-Image | transformer + VAE + text encoder into `models/Tongyi-MAI_Z-Image` | ~19.6 GB |
+| Krea 2 | gated DiT + Qwen VAE + Qwen3-VL text encoder into `models/krea_Krea-2-Raw` | ~34 GB |
+| Qwen pre-seed *(optional)* | warms the Hugging Face cache; ai-toolkit self-downloads on first training anyway | ~14 GB |
+
+Every step is skippable and re-runnable (downloads resume). The token is used in
+memory only — nothing is saved to disk. Krea 2 also requires accepting the repo
+terms at https://huggingface.co/krea/Krea-2-Raw before the download works.
 
 Manual equivalent:
 
@@ -33,7 +46,8 @@ python app.py
 
 ## Backends: one-time setup
 
-Clone the backends next to this folder (or anywhere — the path is a UI field):
+The easy path is `install.bat` above. Doing it manually — clone the backends next
+to this folder (or anywhere — the path is a UI field):
 
 ```powershell
 # musubi-tuner, for Z-Image and Krea 2
@@ -58,9 +72,10 @@ one is missing.
 ## Using it
 
 1. **Dataset** — name it, upload images, click *Create dataset*.
-2. **AI captions** *(optional)* — click *AI captions* to auto-tag every image
-   with a WD14 tagger (CPU, downloads the model once). Add a trigger word and
-   it gets prepended to each caption.
+2. **Captions** — every image needs a `<image>.txt` caption or the trainers
+   silently skip it. Click *AI captions* to auto-tag the whole folder with a
+   WD14 tagger (CPU, downloads the model once). Add a trigger word and it gets
+   prepended to each caption.
 3. **Train** — pick base model, LoRA name, keep defaults, *Preview commands*
    to inspect the exact script, then *Start training*.
    **Repeats per image** controls how often each image appears in an epoch.
@@ -90,10 +105,10 @@ memory-efficient saves, and seed. They are written directly into the generated
 PowerShell command; options labelled **musubi only** are intentionally not sent
 to Qwen's different ai-toolkit backend.
 
-**Full BF16 base weights** is available only for the musubi models. It lowers
-VRAM versus FP32 base weights, but is experimental and automatically pairs
-Adafactor with fused backward pass. For most GPUs, use the default scaled FP8
-profile first.
+**Full BF16 base weights** and **memory-efficient checkpoint saves** were removed
+with musubi-tuner 0.3.5 (its consolidated `*_train_network.py` scripts no longer
+accept those flags) — the app refuses them. Use the default scaled FP8 base
+weights, which is the recommended low-VRAM path for Z-Image and Krea 2.
 
 Everything (dataset TOML, YAML, script, log, checkpoints) is written to
 `outputs/<your lora name>/`, so a run is fully reproducible.

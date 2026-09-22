@@ -1,4 +1,25 @@
-# fluxgym-pro handoff — v1.05
+# fluxgym-pro handoff — v1.06
+
+## Changed this session (v1.06)
+
+- **New `install.bat` + `install.py`** — easy one-time setup for new users:
+  - `install.bat` ensures the UI venv, installs `requirements.txt` (added `huggingface_hub`),
+    then runs `install.py` interactively.
+  - `install.py` asks **yes/no** for: Backends (clones `musubi-tuner` + `ai-toolkit` into
+    the repo's parent + their venvs with cu128 torch), Z-Image weights (~19.6 GB public),
+    Krea 2 weights (gated DiT `raw.safetensors` + `qwen_image_vae.safetensors` +
+    `qwen3vl_4b_bf16.safetensors` into `models/krea_Krea-2-Raw`), and an optional Qwen
+    cache pre-seed.
+  - **HF token prompt** appears ONLY when Krea 2 is chosen (or `HF_TOKEN` env var).
+    Token is transient (never saved). Gated-download errors print actionable fixes
+    (accept repo terms + create read token). Re-runs resume/skip existing downloads.
+  - Verified: syntax OK, full interactive "all n" pass via `install.bat`, token prompt reads
+    via stdin. No live 25 GB download was performed during test.
+  - `install.py --dry-run` prints actions without doing them.
+- README: documented the installer flow (incl. the table of prompts/sizes), corrected stale
+  claims — "Full BF16" and "mem-eff saves" are refused by musubi 0.3.5; captions are now
+  described as **required** per image (musubi drops images without a `.txt`).
+- Version bump v1.05 → v1.06 (UI heading).
 
 ## Verified this session: real end-to-end training on all 3 architectures (2026-09-22)
 

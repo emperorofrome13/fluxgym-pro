@@ -446,7 +446,7 @@ def sample_controls(enabled):
 
 with gr.Blocks(title="fluxgym-pro") as app:
     gr.Markdown(
-        "# fluxgym-pro v1.05\n"
+        "# fluxgym-pro v1.06\n"
         "Dead simple LoRA training for **Z-Image**, **Krea 2** and "
         "**Qwen-Image-2.1** — a fork of fluxgym.\n\n"
         "1. Create a dataset  2. (optional) AI captions  3. Pick a base model  "
