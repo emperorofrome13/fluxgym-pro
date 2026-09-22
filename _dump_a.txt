@@ -1,0 +1,188 @@
+2: """
+3: fluxgym-pro — dead simple LoRA training UI for Z-Image, Krea 2 and Qwen-Image-2.1.
+4: 
+5: Fork of cocktailpeanut/fluxgym with the sd-scripts backend swapped for:
+6:   * musubi-tuner  -> Z-Image and Krea 2 LoRA training
+7:   * ai-toolkit    -> Qwen-Image-2.1 LoRA training (day-0 upstream support)
+8: 
+9: Pure UI + process launcher: no torch import, so it starts on any machine.
+10: The heavy lifting happens in the generated train.ps1 scripts.
+11: """
+12: 
+13: import os
+14: import sys
+15: import shutil
+16: import subprocess
+17: 
+18: import gradio as gr
+19: import yaml
+20: 
+21: ROOT = os.path.dirname(os.path.abspath(__file__))
+22: DATASETS_DIR = os.path.join(ROOT, "datasets")
+23: OUTPUTS_DIR = os.path.join(ROOT, "outputs")
+24: MODELS_DIR = os.path.join(ROOT, "models")
+25: MODELS_YAML = os.path.join(ROOT, "models.yaml")
+26: os.makedirs(DATASETS_DIR, exist_ok=True)
+27: os.makedirs(OUTPUTS_DIR, exist_ok=True)
+28: os.makedirs(MODELS_DIR, exist_ok=True)
+29: 
+30: with open(MODELS_YAML, "r", encoding="utf-8") as f:
+31:     MODELS = yaml.safe_load(f)
+32: MODEL_NAMES = list(MODELS.keys())
+33: 
+34: RUNNING = {}       # output_name -> training Popen
+35: CAPTION_JOBS = {}  # dataset name  -> captioning Popen
+36: 
+37: IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+38: 
+39: 
+40: def _safe_name(name, what="name"):
+41:     name = (name or "").strip().strip('"')
+42:     if not name:
+43:         raise gr.Error(f"Give the {what}.")
+44:     if '"' in name or "\\" in name or any(c in name for c in '<>|:*?'):
+45:         raise gr.Error(f"{what} cannot contain quotes, backslashes or <>|:*? characters.")
+46:     if name in (".", "..") or name.startswith("."):
+47:         raise gr.Error(f"{what} cannot start with a dot.")
+48:     return name
+49: 
+50: 
+51: # ---------------------------------------------------------------- dataset ---
+52: def dataset_names():
+53:     if not os.path.isdir(DATASETS_DIR):
+54:         return []
+55:     return sorted(
+56:         d for d in os.listdir(DATASETS_DIR)
+57:         if os.path.isdir(os.path.join(DATASETS_DIR, d, "img"))
+58:     )
+59: 
+60: 
+61: def create_dataset(name, files, trigger):
+62:     name = _safe_name(name, "dataset name")
+63:     if not files:
+64:         raise gr.Error("Add at least one image.")
+65:     img_dir = os.path.join(DATASETS_DIR, name, "img")
+66:     os.makedirs(img_dir, exist_ok=True)
+67:     trigger = (trigger or "").strip()
+68:     n = 0
+69:     for src in files:
+70:         path = src.name if hasattr(src, "name") else src  # gradio 4/5 compat
+71:         base, _ = os.path.splitext(os.path.basename(path))
+72:         dst = os.path.join(img_dir, os.path.basename(path))
+73:         shutil.copy2(path, dst)
+74:         cap = os.path.join(img_dir, base + ".txt")
+75:         content = ""
+76:         if os.path.exists(cap):
+77:             with open(cap, "r", encoding="utf-8") as f:
+78:                 content = f.read().strip()
+79:         if trigger and not content.startswith(trigger):
+80:             content = f"{trigger} {content}".strip()
+81:         with open(cap, "w", encoding="utf-8") as f:
+82:             f.write(content)
+83:         n += 1
+84:     with open(os.path.join(DATASETS_DIR, name, "trigger.txt"), "w",
+85:               encoding="utf-8") as f:
+86:         f.write(trigger)
+87:     return (f"Dataset '{name}' created with {n} images.",
+88:             gr.update(choices=dataset_names(), value=name))
+89: 
+90: 
+91: def dataset_trigger(name):
+92:     path = os.path.join(DATASETS_DIR, name or "", "trigger.txt")
+93:     if not os.path.abspath(path).startswith(os.path.abspath(DATASETS_DIR)
+94:                                             + os.sep):
+95:         return ""
+96:     if os.path.isfile(path):
+97:         with open(path, "r", encoding="utf-8") as f:
+98:             return f.read().strip()
+99:     return ""
+100: 
+101: 
+102: def auto_caption(dataset_ui, dataset_dd):
+103:     """Run AI captioning (WD14 tagger) over a dataset in the background, CPU-only."""
+104:     name = _safe_name((dataset_ui or "").strip() or (dataset_dd or "").strip(),
+105:                       "dataset name")
+106:     if not name:
+107:         raise gr.Error("Create a dataset first, then run AI captions.")
+108:     img_dir = os.path.join(DATASETS_DIR, name, "img")
+109:     if not os.path.isdir(img_dir):
+110:         raise gr.Error(f"Dataset '{name}' not found. Create it first.")
+111:     if not any(f.lower().endswith(IMG_EXTS) for f in os.listdir(img_dir)):
+112:         raise gr.Error(f"Dataset '{name}' has no images.")
+113: 
+114:     cap_py = os.path.join(ROOT, "caption.py")
+115:     ps1 = os.path.join(DATASETS_DIR, name, "caption.ps1")
+116:     log_path = os.path.join(DATASETS_DIR, name, "caption.log")
+117:     py = sys.executable
+118:     with open(ps1, "w", encoding="utf-8-sig") as f:
+119:         f.write(
+120:             "$ErrorActionPreference = 'Stop'\n"
+121:             f"$py = \"{py}\"\n"
+122:             "& $py -c \"import onnxruntime, huggingface_hub, numpy, PIL\" 2>$null\n"
+123:             "if ($LASTEXITCODE -ne 0) { & $py -m pip install --quiet onnxruntime huggingface_hub numpy pillow }\n"
+124:             f"& $py \"{cap_py}\" \"{img_dir}\" \"{dataset_trigger(name)}\"\n"
+125:             "if ($LASTEXITCODE -ne 0) { throw \"AI captioning failed - see caption.log\" }\n"
+126:         )
+127:     log = open(log_path, "w", encoding="utf-8", buffering=1)
+128:     proc = subprocess.Popen(
+129:         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1],
+130:         cwd=DATASETS_DIR, stdout=log, stderr=subprocess.STDOUT)
+131:     CAPTION_JOBS[name] = proc
+132:     return (f"AI captioning started for '{name}' in the background (CPU-only, "
+133:             f"first run downloads the WD14 tagger model). "
+134:             f"Existing captions are kept. Log: {log_path}")
+135: 
+136: 
+137: def check_caption(dataset_ui, dataset_dd):
+138:     name = (dataset_ui or "").strip() or (dataset_dd or "").strip()
+139:     if not name:
+140:         return "(no dataset selected)"
+141:     p = CAPTION_JOBS.get(name)
+142:     if p is not None and p.poll() is None:
+143:         return f"AI captioning for '{name}' is RUNNING (pid {p.pid})."
+144:     if p is not None:
+145:         return (f"AI captioning for '{name}' FINISHED with exit code {p.returncode}."
+146:                 if p.returncode == 0 else
+147:                 f"AI captioning for '{name}' FAILED (exit code {p.returncode}) - see caption.log.")
+148:     return f"'{name}' was not captioned in this session. Click 'AI captions' to start."
+149: 
+150: 
+151: # ------------------------------------------------------------------ config ---
+152: def _n_images(train_dir):
+153:     img_dir = os.path.join(train_dir, "img")
+154:     if not os.path.isdir(img_dir):
+155:         return 0
+156:     return len([f for f in os.listdir(img_dir) if f.lower().endswith(IMG_EXTS)])
+157: 
+158: 
+159: def _resolve_weights(m, backend):
+160:     """Weight paths resolve to models/<repo>/..., then the backend folder; absolute wins."""
+161:     repo_dir = os.path.join(MODELS_DIR, (m.get("repo") or "").replace("/", "_"))
+162:     out = {}
+163:     for key in ("dit_path", "vae_path", "text_encoder_path"):
+164:         val = (m.get(key) or "").strip()
+165:         if not val:
+166:             continue
+167:         if os.path.isabs(val):
+168:             out[key] = os.path.abspath(val)
+169:             continue
+170:         for base in (repo_dir, backend):
+171:             cand = os.path.abspath(os.path.join(base, val))
+172:             if os.path.exists(cand):
+173:                 out[key] = cand
+174:                 break
+175:         else:
+176:             out[key] = os.path.abspath(os.path.join(repo_dir, val))
+177:     return out
+178: 
+179: 
+180: def _pick_python(backend):
+181:     for cand in (".venv", "venv"):
+182:         for sub in ("Scripts", "bin"):
+183:             exe = os.path.join(backend, cand, sub,
+184:                                "python.exe" if os.name == "nt" else "python")
+185:             if os.path.isfile(exe):
+186:                 return exe
+187:     return sys.executable
+188: 
+189: 

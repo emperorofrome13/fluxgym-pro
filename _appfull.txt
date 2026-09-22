@@ -1,0 +1,442 @@
+1: """
+2: fluxgym-pro — dead simple LoRA training UI for Z-Image, Krea 2 and Qwen-Image-2.1.
+3: 
+4: Fork of cocktailpeanut/fluxgym with the sd-scripts backend swapped for:
+5:   * musubi-tuner  -> Z-Image and Krea 2 LoRA training
+6:   * ai-toolkit    -> Qwen-Image-2.1 LoRA training (day-0 upstream support)
+7: 
+8: Pure UI + process launcher: no torch import, so it starts on any machine.
+9: The heavy lifting happens in the generated train.ps1 scripts.
+10: """
+11: 
+12: import os
+13: import sys
+14: import shutil
+15: import subprocess
+16: 
+17: import gradio as gr
+18: import yaml
+19: 
+20: ROOT = os.path.dirname(os.path.abspath(__file__))
+21: DATASETS_DIR = os.path.join(ROOT, "datasets")
+22: OUTPUTS_DIR = os.path.join(ROOT, "outputs")
+23: MODELS_DIR = os.path.join(ROOT, "models")
+24: MODELS_YAML = os.path.join(ROOT, "models.yaml")
+25: os.makedirs(DATASETS_DIR, exist_ok=True)
+26: os.makedirs(OUTPUTS_DIR, exist_ok=True)
+27: os.makedirs(MODELS_DIR, exist_ok=True)
+28: 
+29: with open(MODELS_YAML, "r", encoding="utf-8") as f:
+30:     MODELS = yaml.safe_load(f)
+31: MODEL_NAMES = list(MODELS.keys())
+32: 
+33: RUNNING = {}       # output_name -> training Popen
+34: CAPTION_JOBS = {}  # dataset name  -> captioning Popen
+35: 
+36: IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+37: 
+38: 
+39: def _safe_name(name, what="name"):
+40:     name = (name or "").strip().strip('"')
+41:     if not name:
+42:         raise gr.Error(f"Give the {what}.")
+43:     if '"' in name or "\\" in name or any(c in name for c in '<>|:*?'):
+44:         raise gr.Error(f"{what} cannot contain quotes, backslashes or <>|:*? characters.")
+45:     if name in (".", "..") or name.startswith("."):
+46:         raise gr.Error(f"{what} cannot start with a dot.")
+47:     return name
+48: 
+49: 
+50: # ---------------------------------------------------------------- dataset ---
+51: def dataset_names():
+52:     if not os.path.isdir(DATASETS_DIR):
+53:         return []
+54:     return sorted(
+55:         d for d in os.listdir(DATASETS_DIR)
+56:         if os.path.isdir(os.path.join(DATASETS_DIR, d, "img"))
+57:     )
+58: 
+59: 
+60: def create_dataset(name, files, trigger):
+61:     name = _safe_name(name, "dataset name")
+62:     if not files:
+63:         raise gr.Error("Add at least one image.")
+64:     img_dir = os.path.join(DATASETS_DIR, name, "img")
+65:     os.makedirs(img_dir, exist_ok=True)
+66:     trigger = (trigger or "").strip()
+67:     n = 0
+68:     for src in files:
+69:         path = src.name if hasattr(src, "name") else src  # gradio 4/5 compat
+70:         base, _ = os.path.splitext(os.path.basename(path))
+71:         dst = os.path.join(img_dir, os.path.basename(path))
+72:         shutil.copy2(path, dst)
+73:         cap = os.path.join(img_dir, base + ".txt")
+74:         content = ""
+75:         if os.path.exists(cap):
+76:             with open(cap, "r", encoding="utf-8") as f:
+77:                 content = f.read().strip()
+78:         if trigger and not content.startswith(trigger):
+79:             content = f"{trigger} {content}".strip()
+80:         with open(cap, "w", encoding="utf-8") as f:
+81:             f.write(content)
+82:         n += 1
+83:     with open(os.path.join(DATASETS_DIR, name, "trigger.txt"), "w",
+84:               encoding="utf-8") as f:
+85:         f.write(trigger)
+86:     return (f"Dataset '{name}' created with {n} images.",
+87:             gr.update(choices=dataset_names(), value=name))
+88: 
+89: 
+90: def dataset_trigger(name):
+91:     path = os.path.join(DATASETS_DIR, name or "", "trigger.txt")
+92:     if not os.path.abspath(path).startswith(os.path.abspath(DATASETS_DIR)
+93:                                             + os.sep):
+94:         return ""
+95:     if os.path.isfile(path):
+96:         with open(path, "r", encoding="utf-8") as f:
+97:             return f.read().strip()
+98:     return ""
+99: 
+100: 
+101: def auto_caption(dataset_ui, dataset_dd):
+102:     """Run AI captioning (WD14 tagger) over a dataset in the background, CPU-only."""
+103:     name = _safe_name((dataset_ui or "").strip() or (dataset_dd or "").strip(),
+104:                       "dataset name")
+105:     if not name:
+106:         raise gr.Error("Create a dataset first, then run AI captions.")
+107:     img_dir = os.path.join(DATASETS_DIR, name, "img")
+108:     if not os.path.isdir(img_dir):
+109:         raise gr.Error(f"Dataset '{name}' not found. Create it first.")
+110:     if not any(f.lower().endswith(IMG_EXTS) for f in os.listdir(img_dir)):
+111:         raise gr.Error(f"Dataset '{name}' has no images.")
+112: 
+113:     cap_py = os.path.join(ROOT, "caption.py")
+114:     ps1 = os.path.join(DATASETS_DIR, name, "caption.ps1")
+115:     log_path = os.path.join(DATASETS_DIR, name, "caption.log")
+116:     py = sys.executable
+117:     with open(ps1, "w", encoding="utf-8-sig") as f:
+118:         f.write(
+119:             "$ErrorActionPreference = 'Stop'\n"
+120:             f"$py = \"{py}\"\n"
+121:             "& $py -c \"import onnxruntime, huggingface_hub, numpy, PIL\" 2>$null\n"
+122:             "if ($LASTEXITCODE -ne 0) { & $py -m pip install --quiet onnxruntime huggingface_hub numpy pillow }\n"
+123:             f"& $py \"{cap_py}\" \"{img_dir}\" \"{dataset_trigger(name)}\"\n"
+124:             "if ($LASTEXITCODE -ne 0) { throw \"AI captioning failed - see caption.log\" }\n"
+125:         )
+126:     log = open(log_path, "w", encoding="utf-8", buffering=1)
+127:     proc = subprocess.Popen(
+128:         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1],
+129:         cwd=DATASETS_DIR, stdout=log, stderr=subprocess.STDOUT)
+130:     CAPTION_JOBS[name] = proc
+131:     return (f"AI captioning started for '{name}' in the background (CPU-only, "
+132:             f"first run downloads the WD14 tagger model). "
+133:             f"Existing captions are kept. Log: {log_path}")
+134: 
+135: 
+136: def check_caption(dataset_ui, dataset_dd):
+137:     name = (dataset_ui or "").strip() or (dataset_dd or "").strip()
+138:     if not name:
+139:         return "(no dataset selected)"
+140:     p = CAPTION_JOBS.get(name)
+141:     if p is not None and p.poll() is None:
+142:         return f"AI captioning for '{name}' is RUNNING (pid {p.pid})."
+143:     if p is not None:
+144:         return (f"AI captioning for '{name}' FINISHED with exit code {p.returncode}."
+145:                 if p.returncode == 0 else
+146:                 f"AI captioning for '{name}' FAILED (exit code {p.returncode}) - see caption.log.")
+147:     return f"'{name}' was not captioned in this session. Click 'AI captions' to start."
+148: 
+149: 
+150: # ------------------------------------------------------------------ config ---
+151: def _n_images(train_dir):
+152:     img_dir = os.path.join(train_dir, "img")
+153:     if not os.path.isdir(img_dir):
+154:         return 0
+155:     return len([f for f in os.listdir(img_dir) if f.lower().endswith(IMG_EXTS)])
+156: 
+157: 
+158: def _resolve_weights(m, backend):
+159:     """Weight paths resolve to models/<repo>/..., then the backend folder; absolute wins."""
+160:     repo_dir = os.path.join(MODELS_DIR, (m.get("repo") or "").replace("/", "_"))
+161:     out = {}
+162:     for key in ("dit_path", "vae_path", "text_encoder_path"):
+163:         val = (m.get(key) or "").strip()
+164:         if not val:
+165:             continue
+166:         if os.path.isabs(val):
+167:             out[key] = os.path.abspath(val)
+168:             continue
+169:         for base in (repo_dir, backend):
+170:             cand = os.path.abspath(os.path.join(base, val))
+171:             if os.path.exists(cand):
+172:                 out[key] = cand
+173:                 break
+174:         else:
+175:             out[key] = os.path.abspath(os.path.join(repo_dir, val))
+176:     return out
+177: 
+178: 
+179: def _pick_python(backend):
+180:     for cand in (".venv", "venv"):
+181:         for sub in ("Scripts", "bin"):
+182:             exe = os.path.join(backend, cand, sub,
+183:                                "python.exe" if os.name == "nt" else "python")
+184:             if os.path.isfile(exe):
+185:                 return exe
+186:     return sys.executable
+187: 
+188: 
+189: def build_cfg(base_model, dataset_name, output_name, backend_dir,
+190:               learning_rate, network_dim, network_alpha, resolution,
+191:               epochs, batch_size, save_every_n_epochs, mixed_precision,
+192:               sample_prompts, sample_every):
+193:     if base_model not in MODELS:
+194:         raise gr.Error("Pick a base model.")
+195:     output_name = _safe_name(output_name, "LoRA name")
+196:     train_dir = os.path.join(DATASETS_DIR, dataset_name or "")
+197:     if _n_images(train_dir) == 0:
+198:         raise gr.Error(f"Dataset '{dataset_name}' has no images. Create one first.")
+199: 
+200:     m = MODELS[base_model]
+201:     arch = m["arch"]
+202:     backend = os.path.abspath((backend_dir or "").strip() or m["backend_dir"])
+203:     if not os.path.isdir(backend):
+204:         raise gr.Error(f"Backend folder not found: {backend}\n"
+205:                        f"Clone it there (see README) or fix the path.")
+206: 
+207:     out_dir = os.path.join(OUTPUTS_DIR, output_name)
+208:     os.makedirs(out_dir, exist_ok=True)
+209:     prompts = [l.strip() for l in (sample_prompts or "").splitlines() if l.strip()]
+210: 
+211:     cfg = {
+212:         "arch": arch,
+213:         "backend_dir": backend,
+214:         "python_exe": _pick_python(backend),
+215:         "train_data_dir": train_dir,
+216:         "toml_path": os.path.join(out_dir, "dataset.toml"),
+217:         "output_dir": out_dir,
+218:         "output_name": output_name,
+219:         "repo": m.get("repo", ""),
+220:         "trigger": dataset_trigger(dataset_name),
+221:         "resolution": int(resolution),
+222:         "batch_size": int(batch_size),
+223:         "epochs": int(epochs),
+224:         "save_every_n_epochs": int(save_every_n_epochs),
+225:         "learning_rate": float(learning_rate),
+226:         "network_dim": int(network_dim),
+227:         "network_alpha": int(network_alpha),
+228:         "mixed_precision": mixed_precision or "bf16",
+229:         "fp8_base": bool(m.get("fp8_base", False)),
+230:         "repeats": int(m.get("num_repeats", 1)),
+231:         "seed": int(m.get("seed", 0)),
+232:         "sample_prompts": prompts,
+233:         "sample_every": int(sample_every or 0),
+234:     }
+235:     cfg.update(_resolve_weights(m, backend))
+236: 
+237:     if arch == "qwen_image_2":
+238:         n = _n_images(train_dir)
+239:         bs = max(1, cfg["batch_size"])
+240:         cfg["steps"] = max(1, (n * cfg["repeats"] * cfg["epochs"]) // bs)
+241:     return cfg
+242: 
+243: 
+244: # ---------------------------------------------------------------- training ---
+245: def preview_commands(base_model, dataset_name, output_name, backend_dir,
+246:                      learning_rate, network_dim, network_alpha, resolution,
+247:                      epochs, batch_size, save_every_n_epochs, mixed_precision,
+248:                      sample_prompts, sample_every):
+249:     args = [base_model, dataset_name, output_name, backend_dir,
+250:             learning_rate, network_dim, network_alpha, resolution,
+251:             epochs, batch_size, save_every_n_epochs, mixed_precision,
+252:             sample_prompts, sample_every]
+253:     try:
+254:         cfg = build_cfg(*args)
+255:     except gr.Error as e:
+256:         return f"Cannot preview yet: {e}"
+257:     from command_gen import full_script
+258:     try:
+259:         return full_script(cfg)
+260:     except (RuntimeError, OSError) as e:
+261:         return f"Cannot preview yet: {e}"
+262: 
+263: 
+264: def start_training(base_model, dataset_name, output_name, backend_dir,
+265:                    learning_rate, network_dim, network_alpha, resolution,
+266:                    epochs, batch_size, save_every_n_epochs, mixed_precision,
+267:                    sample_prompts, sample_every):
+268:     args = [base_model, dataset_name, output_name, backend_dir,
+269:             learning_rate, network_dim, network_alpha, resolution,
+270:             epochs, batch_size, save_every_n_epochs, mixed_precision,
+271:             sample_prompts, sample_every]
+272:     cfg = build_cfg(*args)
+273: 
+274:     from command_gen import full_script, dataset_toml
+275:     if cfg["arch"] != "qwen_image_2":
+276:         with open(cfg["toml_path"], "w", encoding="utf-8") as f:
+277:             f.write(dataset_toml(cfg["train_data_dir"], cfg["resolution"],
+278:                                  cfg["batch_size"], cfg["repeats"]))
+279: 
+280:     try:
+281:         script = full_script(cfg)
+282:     except (RuntimeError, OSError) as e:
+283:         raise gr.Error(str(e))
+284: 
+285:     ps1 = os.path.join(cfg["output_dir"], "train.ps1")
+286:     with open(ps1, "w", encoding="utf-8-sig") as f:
+287:         f.write(script)
+288: 
+289:     log = open(os.path.join(cfg["output_dir"], "train.log"),
+290:                "w", encoding="utf-8", buffering=1)
+291:     proc = subprocess.Popen(
+292:         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1],
+293:         cwd=cfg["output_dir"], stdout=log, stderr=subprocess.STDOUT)
+294:     RUNNING[cfg["output_name"]] = proc
+295: 
+296:     return (gr.update(choices=run_names(), value=cfg["output_name"]),
+297:             f"Training started. Log: {os.path.join(cfg['output_dir'], 'train.log')}\n\n"
+298:             f"Generated commands:\n\n{script}")
+299: 
+300: 
+301: # ------------------------------------------------------------------ status ---
+302: def run_names():
+303:     if not os.path.isdir(OUTPUTS_DIR):
+304:         return []
+305:     return sorted(d for d in os.listdir(OUTPUTS_DIR)
+306:                   if os.path.isdir(os.path.join(OUTPUTS_DIR, d)))
+307: 
+308: 
+309: def check_status(output_name):
+310:     p = RUNNING.get(output_name)
+311:     if p is None:
+312:         return f"'{output_name}' was not started in this session (or already cleared)."
+313:     if p.poll() is None:
+314:         return f"RUNNING (pid {p.pid})"
+315:     return f"FINISHED with exit code {p.returncode}"
+316: 
+317: 
+318: def read_log(output_name):
+319:     try:
+320:         name = _safe_name(output_name, "run name")
+321:     except gr.Error:
+322:         return "(no log yet)"
+323:     path = os.path.join(OUTPUTS_DIR, name, "train.log")
+324:     if not os.path.isfile(path):
+325:         return "(no log yet)"
+326:     with open(path, "r", encoding="utf-8", errors="replace") as f:
+327:         return f.read()[-8000:]
+328: 
+329: 
+330: # --------------------------------------------------------------------- UI ---
+331: def on_model_change(name):
+332:     m = MODELS.get(name, {})
+333:     return (m.get("default_lr", 1e-4), m.get("default_dim", 16),
+334:             m.get("default_alpha", 16), m.get("default_resolution", 1024),
+335:             m.get("backend_dir", ""))
+336: 
+337: 
+338: with gr.Blocks(title="fluxgym-pro") as app:
+339:     gr.Markdown(
+340:         "# fluxgym-pro\n"
+341:         "Dead simple LoRA training for **Z-Image**, **Krea 2** and "
+342:         "**Qwen-Image-2.1** — a fork of fluxgym.\n\n"
+343:         "1. Create a dataset  2. (optional) AI captions  3. Pick a base model  "
+344:         "4. Preview  5. Start"
+345:     )
+346: 
+347:     with gr.Row():
+348:         with gr.Column():
+349:             gr.Markdown("## 1. Dataset")
+350:             ds_name = gr.Textbox(label="Dataset name", placeholder="my_lora")
+351:             ds_upload = gr.File(label="Images", file_count="multiple",
+352:                                 file_types=["image"])
+353:             ds_trigger = gr.Textbox(label="Trigger word (prepended to captions)",
+354:                                     placeholder="ohwx woman")
+355:             with gr.Row():
+356:                 ds_btn = gr.Button("Create dataset", variant="primary")
+357:                 ds_caption_btn = gr.Button("AI captions (WD14 tagger, CPU)")
+358:                 ds_caption_check = gr.Button("Check captioning")
+359:             ds_status = gr.Markdown()
+360:             ds_dropdown = gr.Dropdown(label="Dataset", choices=dataset_names())
+361: 
+362:             gr.Markdown("## Sample prompts")
+363:             sample_prompts = gr.Textbox(
+364:                 label="Sample prompts (one per line, generated during training)",
+365:                 placeholder="a photo of my subject at the beach\n"
+366:                             "my subject holding a coffee cup",
+367:                 lines=3)
+368:             sample_every = gr.Number(label="Generate samples every N epochs",
+369:                                      value=1, precision=0, minimum=0)
+370: 
+371:         with gr.Column():
+372:             gr.Markdown("## 2. Training")
+373:             base_model = gr.Dropdown(label="Base model", choices=MODEL_NAMES,
+374:                                      value=MODEL_NAMES[0] if MODEL_NAMES else None)
+375:             backend_dir = gr.Textbox(label="Backend folder (musubi-tuner / ai-toolkit)",
+376:                                      value=MODELS[MODEL_NAMES[0]]["backend_dir"] if MODEL_NAMES else "")
+377:             output_name = gr.Textbox(label="LoRA name", placeholder="my_lora_v1")
+378:             with gr.Row():
+379:                 learning_rate = gr.Number(
+380:                     label="Learning rate",
+381:                     value=MODELS[MODEL_NAMES[0]]["default_lr"] if MODEL_NAMES else 1e-4)
+382:                 network_dim = gr.Number(
+383:                     label="LoRA dim (rank)",
+384:                     value=MODELS[MODEL_NAMES[0]]["default_dim"] if MODEL_NAMES else 16,
+385:                     precision=0)
+386:                 network_alpha = gr.Number(
+387:                     label="LoRA alpha",
+388:                     value=MODELS[MODEL_NAMES[0]]["default_alpha"] if MODEL_NAMES else 16,
+389:                     precision=0)
+390:             with gr.Row():
+391:                 resolution = gr.Number(
+392:                     label="Resolution",
+393:                     value=MODELS[MODEL_NAMES[0]]["default_resolution"] if MODEL_NAMES else 1024,
+394:                     precision=0)
+395:                 epochs = gr.Number(label="Epochs", value=10, precision=0)
+396:                 batch_size = gr.Number(label="Batch size", value=1, precision=0)
+397:                 save_every_n_epochs = gr.Number(label="Save every N epochs",
+398:                                                 value=2, precision=0)
+399:             mixed_precision = gr.Dropdown(label="Mixed precision",
+400:                                           choices=["bf16", "fp16"], value="bf16")
+401:             with gr.Row():
+402:                 btn_preview = gr.Button("Preview commands")
+403:                 btn_start = gr.Button("Start training", variant="primary")
+404: 
+405:     gr.Markdown("## Commands")
+406:     cmd_out = gr.Code(label="train.ps1", lines=24)
+407: 
+408:     gr.Markdown("## Status")
+409:     with gr.Row():
+410:         st_name = gr.Dropdown(label="Run", choices=run_names())
+411:         st_refresh = gr.Button("Refresh runs")
+412:         st_check = gr.Button("Check status")
+413:     st_status = gr.Textbox(label="Status", interactive=False)
+414:     st_log = gr.Textbox(label="Log (tail)", lines=14, interactive=False)
+415: 
+416:     # ---- wiring
+417:     UI_INPUTS = [base_model, ds_dropdown, output_name, backend_dir,
+418:                  learning_rate, network_dim, network_alpha, resolution,
+419:                  epochs, batch_size, save_every_n_epochs, mixed_precision,
+420:                  sample_prompts, sample_every]
+421: 
+422:     ds_btn.click(create_dataset, [ds_name, ds_upload, ds_trigger],
+423:                  [ds_status, ds_dropdown])
+424:     ds_caption_btn.click(auto_caption, [ds_name, ds_dropdown], [ds_status])
+425:     ds_caption_check.click(check_caption, [ds_name, ds_dropdown], [ds_status])
+426: 
+427:     base_model.change(on_model_change, [base_model],
+428:                       [learning_rate, network_dim, network_alpha,
+429:                        resolution, backend_dir])
+430: 
+431:     btn_preview.click(preview_commands, UI_INPUTS, [cmd_out])
+432:     btn_start.click(start_training, UI_INPUTS, [st_name, cmd_out])
+433: 
+434:     st_refresh.click(lambda: gr.update(choices=run_names()), None, [st_name])
+435:     st_check.click(check_status, [st_name], [st_status])
+436:     st_name.change(read_log, [st_name], [st_log])
+437: 
+438: 
+439: if __name__ == "__main__":
+440:     app.queue().launch(server_name="127.0.0.1",
+441:                        server_port=int(os.environ.get("FGP_PORT", "7860")),
+442:                        inbrowser=os.environ.get("FGP_NO_BROWSER") != "1")

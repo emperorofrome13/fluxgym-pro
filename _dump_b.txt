@@ -1,0 +1,149 @@
+190: def build_cfg(base_model, dataset_name, output_name, backend_dir,
+191:               learning_rate, network_dim, network_alpha, resolution,
+192:               epochs, batch_size, save_every_n_epochs, mixed_precision,
+193:               sample_prompts, sample_every):
+194:     if base_model not in MODELS:
+195:         raise gr.Error("Pick a base model.")
+196:     output_name = _safe_name(output_name, "LoRA name")
+197:     train_dir = os.path.join(DATASETS_DIR, dataset_name or "")
+198:     if _n_images(train_dir) == 0:
+199:         raise gr.Error(f"Dataset '{dataset_name}' has no images. Create one first.")
+200: 
+201:     m = MODELS[base_model]
+202:     arch = m["arch"]
+203:     backend = os.path.abspath((backend_dir or "").strip() or m["backend_dir"])
+204:     if not os.path.isdir(backend):
+205:         raise gr.Error(f"Backend folder not found: {backend}\n"
+206:                        f"Clone it there (see README) or fix the path.")
+207: 
+208:     out_dir = os.path.join(OUTPUTS_DIR, output_name)
+209:     os.makedirs(out_dir, exist_ok=True)
+210:     prompts = [l.strip() for l in (sample_prompts or "").splitlines() if l.strip()]
+211: 
+212:     cfg = {
+213:         "arch": arch,
+214:         "backend_dir": backend,
+215:         "python_exe": _pick_python(backend),
+216:         "train_data_dir": train_dir,
+217:         "toml_path": os.path.join(out_dir, "dataset.toml"),
+218:         "output_dir": out_dir,
+219:         "output_name": output_name,
+220:         "repo": m.get("repo", ""),
+221:         "trigger": dataset_trigger(dataset_name),
+222:         "resolution": int(resolution),
+223:         "batch_size": int(batch_size),
+224:         "epochs": int(epochs),
+225:         "save_every_n_epochs": int(save_every_n_epochs),
+226:         "learning_rate": float(learning_rate),
+227:         "network_dim": int(network_dim),
+228:         "network_alpha": int(network_alpha),
+229:         "mixed_precision": mixed_precision or "bf16",
+230:         "fp8_base": bool(m.get("fp8_base", False)),
+231:         "repeats": int(m.get("num_repeats", 1)),
+232:         "seed": int(m.get("seed", 0)),
+233:         "sample_prompts": prompts,
+234:         "sample_every": int(sample_every or 0),
+235:     }
+236:     cfg.update(_resolve_weights(m, backend))
+237: 
+238:     if arch == "qwen_image_2":
+239:         n = _n_images(train_dir)
+240:         bs = max(1, cfg["batch_size"])
+241:         cfg["steps"] = max(1, (n * cfg["repeats"] * cfg["epochs"]) // bs)
+242:     return cfg
+243: 
+244: 
+245: # ---------------------------------------------------------------- training ---
+246: def preview_commands(base_model, dataset_name, output_name, backend_dir,
+247:                      learning_rate, network_dim, network_alpha, resolution,
+248:                      epochs, batch_size, save_every_n_epochs, mixed_precision,
+249:                      sample_prompts, sample_every):
+250:     args = [base_model, dataset_name, output_name, backend_dir,
+251:             learning_rate, network_dim, network_alpha, resolution,
+252:             epochs, batch_size, save_every_n_epochs, mixed_precision,
+253:             sample_prompts, sample_every]
+254:     try:
+255:         cfg = build_cfg(*args)
+256:     except gr.Error as e:
+257:         return f"Cannot preview yet: {e}"
+258:     from command_gen import full_script
+259:     try:
+260:         return full_script(cfg)
+261:     except (RuntimeError, OSError) as e:
+262:         return f"Cannot preview yet: {e}"
+263: 
+264: 
+265: def start_training(base_model, dataset_name, output_name, backend_dir,
+266:                    learning_rate, network_dim, network_alpha, resolution,
+267:                    epochs, batch_size, save_every_n_epochs, mixed_precision,
+268:                    sample_prompts, sample_every):
+269:     args = [base_model, dataset_name, output_name, backend_dir,
+270:             learning_rate, network_dim, network_alpha, resolution,
+271:             epochs, batch_size, save_every_n_epochs, mixed_precision,
+272:             sample_prompts, sample_every]
+273:     cfg = build_cfg(*args)
+274: 
+275:     from command_gen import full_script, dataset_toml
+276:     if cfg["arch"] != "qwen_image_2":
+277:         with open(cfg["toml_path"], "w", encoding="utf-8") as f:
+278:             f.write(dataset_toml(cfg["train_data_dir"], cfg["resolution"],
+279:                                  cfg["batch_size"], cfg["repeats"]))
+280: 
+281:     try:
+282:         script = full_script(cfg)
+283:     except (RuntimeError, OSError) as e:
+284:         raise gr.Error(str(e))
+285: 
+286:     ps1 = os.path.join(cfg["output_dir"], "train.ps1")
+287:     with open(ps1, "w", encoding="utf-8-sig") as f:
+288:         f.write(script)
+289: 
+290:     log = open(os.path.join(cfg["output_dir"], "train.log"),
+291:                "w", encoding="utf-8", buffering=1)
+292:     proc = subprocess.Popen(
+293:         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1],
+294:         cwd=cfg["output_dir"], stdout=log, stderr=subprocess.STDOUT)
+295:     RUNNING[cfg["output_name"]] = proc
+296: 
+297:     return (gr.update(choices=run_names(), value=cfg["output_name"]),
+298:             f"Training started. Log: {os.path.join(cfg['output_dir'], 'train.log')}\n\n"
+299:             f"Generated commands:\n\n{script}")
+300: 
+301: 
+302: # ------------------------------------------------------------------ status ---
+303: def run_names():
+304:     if not os.path.isdir(OUTPUTS_DIR):
+305:         return []
+306:     return sorted(d for d in os.listdir(OUTPUTS_DIR)
+307:                   if os.path.isdir(os.path.join(OUTPUTS_DIR, d)))
+308: 
+309: 
+310: def check_status(output_name):
+311:     p = RUNNING.get(output_name)
+312:     if p is None:
+313:         return f"'{output_name}' was not started in this session (or already cleared)."
+314:     if p.poll() is None:
+315:         return f"RUNNING (pid {p.pid})"
+316:     return f"FINISHED with exit code {p.returncode}"
+317: 
+318: 
+319: def read_log(output_name):
+320:     try:
+321:         name = _safe_name(output_name, "run name")
+322:     except gr.Error:
+323:         return "(no log yet)"
+324:     path = os.path.join(OUTPUTS_DIR, name, "train.log")
+325:     if not os.path.isfile(path):
+326:         return "(no log yet)"
+327:     with open(path, "r", encoding="utf-8", errors="replace") as f:
+328:         return f.read()[-8000:]
+329: 
+330: 
+331: # --------------------------------------------------------------------- UI ---
+332: def on_model_change(name):
+333:     m = MODELS.get(name, {})
+334:     return (m.get("default_lr", 1e-4), m.get("default_dim", 16),
+335:             m.get("default_alpha", 16), m.get("default_resolution", 1024),
+336:             m.get("backend_dir", ""))
+337: 
+338: 

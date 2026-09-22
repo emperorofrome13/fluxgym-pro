@@ -1,0 +1,50 @@
+1: # Model registry for fluxgym-pro
+2: # Each entry = one dropdown option in the UI.
+3: #
+4: # arch must be one of: zimage | krea2 | qwen_image_2
+5: #   zimage / krea2  -> trained with musubi-tuner   (backend_dir = musubi-tuner checkout)
+6: #   qwen_image_2    -> trained with ai-toolkit     (backend_dir = ai-toolkit checkout)
+7: #
+8: # Weight paths are resolved relative to the repo checkout the UI downloads to.
+9: # Leave a weight path empty to auto-resolve to <models_dir>/<repo>/<subpath>.
+10: 
+11: Z-Image (Tongyi, 6B):
+12:   arch: zimage
+13:   repo: Tongyi-MAI/Z-Image
+14:   backend_dir: ../musubi-tuner
+15:   # HF listing: transformer/diffusion_pytorch_model-00001-of-00002.safetensors
+16:   # (musubi wants the FIRST file of a sharded checkpoint; all shards must be present)
+17:   dit_path: transformer/diffusion_pytorch_model-00001-of-00002.safetensors
+18:   vae_path: vae/diffusion_pytorch_model.safetensors
+19:   text_encoder_path: text_encoder/model-00001-of-00003.safetensors
+20:   default_lr: 1e-4
+21:   default_dim: 32
+22:   default_alpha: 16
+23:   default_resolution: 1024
+24:   # musubi requires --fp8_base and --fp8_scaled together; this is the low-VRAM default
+25:   fp8_base: true
+26: 
+27: Krea 2 (Raw):
+28:   arch: krea2
+29:   repo: krea/Krea-2-Raw
+30:   backend_dir: ../musubi-tuner
+31:   dit_path: raw.safetensors
+32:   vae_path: vae/diffusion_pytorch_model.safetensors
+33:   text_encoder_path: text_encoder/model.safetensors
+34:   default_lr: 1e-4
+35:   default_dim: 32
+36:   default_alpha: 32
+37:   default_resolution: 1024
+38:   fp8_base: true
+39: 
+40: Qwen-Image-2.1:
+41:   arch: qwen_image_2
+42:   repo: Qwen/Qwen-Image-2.1
+43:   backend_dir: ../ai-toolkit
+44:   dit_path: ""
+45:   vae_path: ""
+46:   text_encoder_path: ""
+47:   default_lr: 1e-4
+48:   default_dim: 16
+49:   default_alpha: 16
+50:   default_resolution: 1328

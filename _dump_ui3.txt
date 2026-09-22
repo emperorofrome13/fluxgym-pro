@@ -1,0 +1,106 @@
+338: 
+339: with gr.Blocks(title="fluxgym-pro") as app:
+340:     gr.Markdown(
+341:         "# fluxgym-pro\n"
+342:         "Dead simple LoRA training for **Z-Image**, **Krea 2** and "
+343:         "**Qwen-Image-2.1** — a fork of fluxgym.\n\n"
+344:         "1. Create a dataset  2. (optional) AI captions  3. Pick a base model  "
+345:         "4. Preview  5. Start"
+346:     )
+347: 
+348:     with gr.Row():
+349:         with gr.Column():
+350:             gr.Markdown("## 1. Dataset")
+351:             ds_name = gr.Textbox(label="Dataset name", placeholder="my_lora")
+352:             ds_upload = gr.File(label="Images", file_count="multiple",
+353:                                 file_types=["image"])
+354:             ds_trigger = gr.Textbox(label="Trigger word (prepended to captions)",
+355:                                     placeholder="ohwx woman")
+356:             with gr.Row():
+357:                 ds_btn = gr.Button("Create dataset", variant="primary")
+358:                 ds_caption_btn = gr.Button("AI captions (WD14 tagger, CPU)")
+359:                 ds_caption_check = gr.Button("Check captioning")
+360:             ds_status = gr.Markdown()
+361:             ds_dropdown = gr.Dropdown(label="Dataset", choices=dataset_names())
+362: 
+363:             gr.Markdown("## Sample prompts")
+364:             sample_prompts = gr.Textbox(
+365:                 label="Sample prompts (one per line, generated during training)",
+366:                 placeholder="a photo of my subject at the beach\n"
+367:                             "my subject holding a coffee cup",
+368:                 lines=3)
+369:             sample_every = gr.Number(label="Generate samples every N epochs",
+370:                                      value=1, precision=0, minimum=0)
+371: 
+372:         with gr.Column():
+373:             gr.Markdown("## 2. Training")
+374:             base_model = gr.Dropdown(label="Base model", choices=MODEL_NAMES,
+375:                                      value=MODEL_NAMES[0] if MODEL_NAMES else None)
+376:             backend_dir = gr.Textbox(label="Backend folder (musubi-tuner / ai-toolkit)",
+377:                                      value=MODELS[MODEL_NAMES[0]]["backend_dir"] if MODEL_NAMES else "")
+378:             output_name = gr.Textbox(label="LoRA name", placeholder="my_lora_v1")
+379:             with gr.Row():
+380:                 learning_rate = gr.Number(
+381:                     label="Learning rate",
+382:                     value=MODELS[MODEL_NAMES[0]]["default_lr"] if MODEL_NAMES else 1e-4)
+383:                 network_dim = gr.Number(
+384:                     label="LoRA dim (rank)",
+385:                     value=MODELS[MODEL_NAMES[0]]["default_dim"] if MODEL_NAMES else 16,
+386:                     precision=0)
+387:                 network_alpha = gr.Number(
+388:                     label="LoRA alpha",
+389:                     value=MODELS[MODEL_NAMES[0]]["default_alpha"] if MODEL_NAMES else 16,
+390:                     precision=0)
+391:             with gr.Row():
+392:                 resolution = gr.Number(
+393:                     label="Resolution",
+394:                     value=MODELS[MODEL_NAMES[0]]["default_resolution"] if MODEL_NAMES else 1024,
+395:                     precision=0)
+396:                 epochs = gr.Number(label="Epochs", value=10, precision=0)
+397:                 batch_size = gr.Number(label="Batch size", value=1, precision=0)
+398:                 save_every_n_epochs = gr.Number(label="Save every N epochs",
+399:                                                 value=2, precision=0)
+400:             mixed_precision = gr.Dropdown(label="Mixed precision",
+401:                                           choices=["bf16", "fp16"], value="bf16")
+402:             with gr.Row():
+403:                 btn_preview = gr.Button("Preview commands")
+404:                 btn_start = gr.Button("Start training", variant="primary")
+405: 
+406:     gr.Markdown("## Commands")
+407:     cmd_out = gr.Code(label="train.ps1", lines=24)
+408: 
+409:     gr.Markdown("## Status")
+410:     with gr.Row():
+411:         st_name = gr.Dropdown(label="Run", choices=run_names())
+412:         st_refresh = gr.Button("Refresh runs")
+413:         st_check = gr.Button("Check status")
+414:     st_status = gr.Textbox(label="Status", interactive=False)
+415:     st_log = gr.Textbox(label="Log (tail)", lines=14, interactive=False)
+416: 
+417:     # ---- wiring
+418:     UI_INPUTS = [base_model, ds_dropdown, output_name, backend_dir,
+419:                  learning_rate, network_dim, network_alpha, resolution,
+420:                  epochs, batch_size, save_every_n_epochs, mixed_precision,
+421:                  sample_prompts, sample_every]
+422: 
+423:     ds_btn.click(create_dataset, [ds_name, ds_upload, ds_trigger],
+424:                  [ds_status, ds_dropdown])
+425:     ds_caption_btn.click(auto_caption, [ds_name, ds_dropdown], [ds_status])
+426:     ds_caption_check.click(check_caption, [ds_name, ds_dropdown], [ds_status])
+427: 
+428:     base_model.change(on_model_change, [base_model],
+429:                       [learning_rate, network_dim, network_alpha,
+430:                        resolution, backend_dir])
+431: 
+432:     btn_preview.click(preview_commands, UI_INPUTS, [cmd_out])
+433:     btn_start.click(start_training, UI_INPUTS, [st_name, cmd_out])
+434: 
+435:     st_refresh.click(lambda: gr.update(choices=run_names()), None, [st_name])
+436:     st_check.click(check_status, [st_name], [st_status])
+437:     st_name.change(read_log, [st_name], [st_log])
+438: 
+439: 
+440: if __name__ == "__main__":
+441:     app.queue().launch(server_name="127.0.0.1",
+442:                        server_port=int(os.environ.get("FGP_PORT", "7860")),
+443:                        inbrowser=os.environ.get("FGP_NO_BROWSER") != "1")
