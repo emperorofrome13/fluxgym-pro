@@ -1,4 +1,14 @@
-# fluxgym-pro handoff — v1.03
+# fluxgym-pro handoff — v1.04
+
+## Changed (this session)
+
+- Added Pinokio script (`pinokio.js`) for launcher/menu integration.
+- Added launcher scripts (`start.js`, `install.js`) using `.venv`.
+- Added `pinokio_meta.json`.
+- Added `.gitignore` (excludes `.venv/`, `models/`, `outputs/`, `datasets/`).
+- Created new GitHub repo: `emperorofrome13/fluxgym-pro` and pushed source.
+
+Note: A GitHub personal access token (`ghp_...`) was pasted in plain text by the user. Since it was exposed in the message, treat it as compromised — revoke/regenerate it in GitHub settings.
 
 ## Changed
 
