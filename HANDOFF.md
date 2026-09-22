@@ -60,5 +60,9 @@ The UI is at `http://127.0.0.1:7860` and shows **v1.04** in its heading.
 - Server started: `GET /` returned HTTP 200 (`len=115672`) at `127.0.0.1:7860`.
 - Test dataset created: `datasets/test_lora/img/test.png` + `trigger.txt`.
 - Config generation works: correctly reports `Backend folder not found: musubi-tuner` (expected — no backend installed).
-- Actual GPU training requires `musubi-tuner` or `ai-toolkit` checkout + model weights; neither backend was available in workspace.
+- Actual GPU training requires `musubi-tuner` or `ai-toolkit` checkout + model weights.
+- Backends downloaded (`musubi-tuner`, `ai-toolkit`) with `.venv` created; dataset `test_lora` works; config + command generation verified (85-line `train.ps1` generated).
+- Registry check-in URL verified accessible: `https://pinokio.computer/checkin?repo=https://github.com/emperorofrome13/fluxgym-pro&app=github-com-emperorofrome13-fluxgym-pro`
+- Registry entry would be at: `https://pinokio.computer/apps/github-com-emperorofrome13-fluxgym-pro`
+- `pterm` registry search verified against `https://api.pinokio.co`
 - Pinokio registry submission: `pterm` is a Unix `#!/bin/sh` script (`g:\pinokio5070\bin\npm\pterm`); use pinokio launcher or web registry for submission.
