@@ -37,7 +37,7 @@ From `E:\aiprojects\zitgym\fluxgym-pro`:
 quickstart.bat
 ```
 
-The UI is at `http://127.0.0.1:7860` and shows **v1.03** in its heading.
+The UI is at `http://127.0.0.1:7860` and shows **v1.04** in its heading.
 
 ## Verification evidence
 
@@ -54,8 +54,11 @@ The UI is at `http://127.0.0.1:7860` and shows **v1.03** in its heading.
   (`APP_IMPORT_OK`, `FULL_ADVANCED_COMMAND_OK`); the live `/config` endpoint
   contains all five advanced sections.
 
-## Note
+## Note / Verification (this session)
 
-Actual GPU training still requires a compatible `musubi-tuner` or `ai-toolkit`
-checkout and the selected model weights; neither backend was run in this UI-only
-verification.
+- App import OK; `.venv` OK (`gradio`, `yaml` present).
+- Server started: `GET /` returned HTTP 200 (`len=115672`) at `127.0.0.1:7860`.
+- Test dataset created: `datasets/test_lora/img/test.png` + `trigger.txt`.
+- Config generation works: correctly reports `Backend folder not found: musubi-tuner` (expected — no backend installed).
+- Actual GPU training requires `musubi-tuner` or `ai-toolkit` checkout + model weights; neither backend was available in workspace.
+- Pinokio registry submission: `pterm` is a Unix `#!/bin/sh` script (`g:\pinokio5070\bin\npm\pterm`); use pinokio launcher or web registry for submission.
